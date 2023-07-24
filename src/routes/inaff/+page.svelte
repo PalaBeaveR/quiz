@@ -5,4 +5,4 @@
     export let data: PageData;
 </script>
 
-<Ui data={data} />
+<Ui {data} admin={true} />

@@ -1,37 +1,67 @@
-import { Event, User, filterDead, sendTo, sendToAll, users } from "$lib/users";
-import type { RequestHandler } from "@sveltejs/kit";
+import { QuizEvent, User, UserType, event, users } from "$lib/users";
+import type { RequestHandler } from "./$types";
+
+let ANON_AMOUNT = 0
+
+let HEARTBEAT: number | null = null
+let LAST_HEARTBEAT = 0
+const HEARTBEAT_INTERVAL = 10000;
+
+export const GET: RequestHandler = () => {
+	let { writable, readable } = new TransformStream();
 
 
-var ANON_NUM = 0
+	const username = `Anon ${ANON_AMOUNT}`;
+	const user = new User(username, UserType.Spectator)
+	users.set(user, writable.getWriter())
+	ANON_AMOUNT += 1
 
-var HEARTBEAT = setInterval(() => {
-	filterDead()
-	for (const user of users) {
-		sendTo(user, Event.HeartBeat, { aight: "OK" })
+	event.sendTo(user, QuizEvent.You, user)
+	event.sendToAll(QuizEvent.LobbyUpdate, {
+		users: Array.from(users.keys())
+	})
+
+	console.log(`User ${username} is now listening to events`)
+
+	if (HEARTBEAT == null) {
+		LAST_HEARTBEAT = Date.now()
+		HEARTBEAT = setInterval(() => {
+			let need_refresh = false
+			for (const user of users.keys()) {
+				if (user.missing_heartbeats >= 2) {
+					need_refresh = true
+					users.delete(user)
+					console.log(`User ${user.name} has been declared dead`)
+					continue
+				}
+				if (user.last_heartbeat < LAST_HEARTBEAT) {
+					need_refresh = true
+					user.missing_heartbeats += 1
+					console.log(`User ${user.name} has missed a heartbeat`)
+				}
+			}
+
+			if (users.size == 0) {
+				clearInterval(HEARTBEAT as number)
+				HEARTBEAT = null
+				ANON_AMOUNT = 0
+				return
+			}
+			
+			LAST_HEARTBEAT = Date.now()
+			event.sendToAll(QuizEvent.HeartBeat, "")
+
+			if (need_refresh) {
+				event.sendToAll(QuizEvent.LobbyUpdate, { users: Array.from(users.keys()) })
+			}
+		}, HEARTBEAT_INTERVAL)
 	}
-}, 5000)
-
-export const GET: RequestHandler = async ({ cookies }) => {
-	const { readable, writable } = new TransformStream()
-
-
-	const writer = writable.getWriter()
-	const username = `Anon${ANON_NUM}`
-	ANON_NUM += 1
-	const user = new User(username, writer);
-	sendTo(user, Event.YourUsername, { username })
-	sendToAll(Event.Join, { username })
-	users.push(user)
 
 
 	return new Response(readable, {
 		headers: {
-			// Denotes the response as SSE
 			'Content-Type': 'text/event-stream',
-			// Optional. Request the GET request not to be cached.
 			'Cache-Control': 'no-cache',
-			Connection: 'keep-alive'
-
 		}
 	})
 }
